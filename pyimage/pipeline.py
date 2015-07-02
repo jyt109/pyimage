@@ -22,9 +22,12 @@ class ImagePipeline(object):
         self.sub_dirs = None
         self.label_map = None
 
+        # Lazy evaluation. A list to hold all the functions before they are executed.
+        self.exec_lst = []
+
         # Image variables that are filled in when read() and vectorize()
         self.img_lst2 = []
-        self.img_names2 = []
+        self.img_paths2 = []
         self.features = None
         self.labels = None
 
@@ -64,7 +67,7 @@ class ImagePipeline(object):
         Reset all the image related instance variables
         """
         self.img_lst2 = []
-        self.img_names2 = []
+        self.img_paths2 = []
         self.features = None
         self.labels = None
 
@@ -129,10 +132,59 @@ class ImagePipeline(object):
 
         for sub_dir in self.sub_dirs:
             img_names = filter(self._accpeted_file_format, os.listdir(sub_dir))
-            self.img_names2.append(img_names)
+            img_paths = map(lambda fname: os.path.join(sub_dir, fname), img_names)
+            self.img_paths2.append(img_paths)
 
-            img_lst = [io.imread(os.path.join(sub_dir, fname)) for fname in img_names]
-            self.img_lst2.append(img_lst)
+        # Appending the function and the params for the function to the exec func list
+        self._append_to_exec_lst(self._read_single, {})
+
+    @staticmethod
+    def _read_single(fpath):
+        """
+        Read a single file. Lazy eval of read.
+
+        :param fpath: The path of the single image to be read in
+        :return: Numpy array of the image
+        """
+        return io.imread(fpath)
+
+    def _append_to_exec_lst(self, func, params):
+        self.exec_lst.append((func, params))
+
+    def _empty_exec_lst(self):
+        del self.exec_lst[:]
+
+    @staticmethod
+    def vectorize(img_arr):
+        return np.ravel(img_arr)
+
+    @staticmethod
+    def _chain_func(func_lst, fpath):
+        """
+        Chain functions together. Call the first function on an object and then
+        the second function on the object return by the first function. Makes the
+        assumption that each function only takes an object and returns another object
+
+        :param func_lst: List of functions
+        :param fpath: The initial object to call the first function on (assume file path)
+        :return: Result (numpy ndarray of image) of the object (file path) after going
+                 through all the functions
+        """
+        return reduce(lambda x, (func, params): func(x, **params), [fpath] + func_lst)
+
+    def run(self, vectorize=True, pickle=True):
+
+        # Append the vectorize function to the list if
+        # the output has to be vectorized
+        if vectorize:
+            self._append_to_exec_lst(self.vectorize, {})
+
+        for subdir in self.img_paths2:
+            for fpath in subdir:
+                self._chain_func(self.exec_lst, fpath)
+
+        # Empty the list after all the functions in exec_lst are executed
+        self._empty_exec_lst()
 
     def save(self, keyword):
         """
@@ -145,7 +197,7 @@ class ImagePipeline(object):
         new_sub_dirs = ['%s.%s' % (sub_dir, keyword) for sub_dir in self.sub_dirs]
 
         # Loop through the sub dirs and loop through images to save images to the respective subdir
-        for new_sub_dir, img_names, img_lst in zip(new_sub_dirs, self.img_names2, self.img_lst2):
+        for new_sub_dir, img_names, img_lst in zip(new_sub_dirs, self.img_paths2, self.img_lst2):
             new_sub_dir_path = self._path_relative_to_parent(new_sub_dir)
             self._make_new_dir(new_sub_dir_path)
 
@@ -244,7 +296,7 @@ class ImagePipeline(object):
         """
         # Get the labels with the dimensions of the number of image files
         self.labels = np.concatenate([np.repeat(i, len(img_names))
-                                      for i, img_names in enumerate(self.img_names2)])
+                                      for i, img_names in enumerate(self.img_paths2)])
 
     def vectorize(self):
         """
